@@ -71,10 +71,10 @@ The final tuned model, evaluated on **7 motor profiles never seen during trainin
 
 | Metric | Result | Interpretation |
 | :--- | :---: | :--- |
-| **MAE** | **1.145 °C** | Average prediction is off by roughly one degree |
-| **RMSE** | **1.644 °C** | Large errors remain small and infrequent |
-| **R-squared** | **0.99696** | Explains approximately 99.7% of temperature variation |
-| Baseline MAE | 25.905 °C | The model is roughly **23x more accurate** than predicting the mean |
+| **MAE** | **1.193 °C** | Average prediction is off by roughly one degree |
+| **RMSE** | **1.718 °C** | Large errors remain small and infrequent |
+| **R-squared** | **0.99666** | Explains approximately 99.7% of temperature variation |
+| Baseline MAE | 25.905 °C | The model is roughly **22x more accurate** than predicting the mean |
 
 <p align="center">
   <img src="graphs/actual_vs_predicted.png" alt="Actual vs Predicted Stator Winding Temperature" width="600">
@@ -114,7 +114,7 @@ motor/
 |   +-- feature_importance.png              # Permutation importance
 |
 +-- models/
-|   +-- final_temperature_model.pkl     # Tuned HistGradientBoosting (11 features)
+|   +-- final_temperature_model.pkl     # Tuned HistGradientBoosting (14 features)
 |
 +-- .gitignore
 +-- readme.md
@@ -159,6 +159,8 @@ This project uses the **Electric Motor Temperature** dataset collected by the LE
 | `profile_id` | Grouping key | Measurement session identifier |
 
 `profile_id` is **excluded from the predictive features**. It identifies a session rather than describing an operating condition, and including it would allow the model to memorise profile-specific behaviour. It is used exclusively as the grouping variable for splitting.
+
+Three additional physics-based features (`current_magnitude`, `voltage_magnitude`, `mechanical_power`) are derived from these columns during feature engineering and are also used as model inputs. See [Feature Engineering and Data Splitting](#3-feature-engineering-and-data-splitting).
 
 ### Data Quality
 
@@ -253,7 +255,7 @@ Overlap between all three profile groups was explicitly verified to be empty.
 
 Notebook: [`notebooks/04_model_training.ipynb`](notebooks/04_model_training.ipynb)
 
-> **Note on scope.** This notebook is self-contained: it re-loads the raw CSV and trains on the **11 raw sensor features**, using its own 80/20 profile split (**55 training, 7 validation, 7 test** profiles, corresponding to 1,026,423 / 178,633 / 125,760 rows). The engineered features from notebook 03 are therefore **not** part of the exported model. See [Known Limitations](#known-limitations).
+> **Note on scope.** This notebook re-loads the raw CSV and re-derives the three engineered features from notebook 03 (`current_magnitude`, `voltage_magnitude`, `mechanical_power`), training on all **14 features** together. It uses its own 80/20 profile split (**55 training, 7 validation, 7 test** profiles, corresponding to 1,026,423 / 178,633 / 125,760 rows), which differs from notebook 03's 70/30 split. See [Known Limitations](#known-limitations).
 
 The task is framed as **supervised regression**: motor sensor readings in, a continuous temperature out.
 
@@ -283,7 +285,7 @@ The target is a **continuous temperature**, making this a regression problem. Cl
 MAE = mean(|actual - predicted|)
 ```
 
-The average absolute error, expressed in degrees Celsius. This is the most directly interpretable metric here: an MAE of 1.145 means the typical prediction is off by approximately 1.1 degrees.
+The average absolute error, expressed in degrees Celsius. This is the most directly interpretable metric here: an MAE of 1.193 means the typical prediction is off by approximately 1.2 degrees.
 
 ### RMSE — Root Mean Squared Error
 
@@ -309,20 +311,20 @@ Validation performance, sorted by RMSE:
 
 | Rank | Model | MAE (°C) | RMSE (°C) | R-squared | Train Time |
 | :---: | :--- | ---: | ---: | ---: | ---: |
-| 1 | **Ridge Regression** | 1.3226 | **1.7722** | **0.996595** | 0.42 s |
-| 2 | Linear Regression | 1.3226 | 1.7722 | 0.996595 | 1.35 s |
-| 3 | HistGradientBoosting | **1.2688** | 1.8167 | 0.996421 | 42.04 s |
-| 4 | Random Forest | 1.4375 | 2.1106 | 0.995170 | 168.43 s |
+| 1 | **Ridge Regression** | **1.2150** | **1.6884** | **0.996909** | 0.48 s |
+| 2 | Linear Regression | 1.2150 | 1.6884 | 0.996909 | 1.21 s |
+| 3 | HistGradientBoosting | 1.2849 | 1.7847 | 0.996546 | 40.42 s |
+| 4 | Random Forest | 1.3543 | 2.0017 | 0.995655 | 172.41 s |
 | — | *Baseline (mean)* | *25.9055* | *30.6057* | *-0.015676* | *0.01 s* |
 
 ### Interpretation
 
-- **Every trained model substantially outperforms the baseline.** The features carry a large amount of predictive signal: a mean-only prediction is off by approximately 26 °C, while the trained models achieve approximately 1.3 °C.
+- **Every trained model substantially outperforms the baseline.** The features carry a large amount of predictive signal: a mean-only prediction is off by approximately 26 °C, while the trained models achieve roughly 1.2–1.4 °C.
 - **The baseline's R-squared is negative.** Because the split is by profile, the validation profiles have a different mean temperature than the training profiles, so the training mean is a slightly worse predictor than the validation set's own mean. This is a characteristic signature of an honest group split.
 - **Linear and Ridge are effectively identical.** With `alpha=1.0` applied to more than one million rows, the L2 penalty is negligible and the two converge to the same solution.
-- **The metrics disagree, which is itself informative.** HistGradientBoosting wins on MAE (best typical error) while the linear models win on RMSE (fewer large errors). Boosting fits the bulk of the distribution more tightly but produces a small number of larger misses.
+- **The linear models win outright here, before tuning.** With the engineered features included, Ridge and Linear Regression beat the untuned HistGradientBoosting model on both MAE and RMSE. This reinforces the earlier correlation finding: the target is substantially a linear function of the stator thermal sensors and the added `current_magnitude` feature.
 
-**Selection.** HistGradientBoosting was carried forward for tuning. It achieved the best MAE, models nonlinear interactions that the linear models structurally cannot, and trains roughly four times faster than Random Forest while scoring better.
+**Selection.** HistGradientBoosting was still carried forward for tuning, since it models nonlinear interactions that the linear models structurally cannot and trains roughly four times faster than Random Forest. After tuning (below), it ends up with the best MAE of any model evaluated, though the linear models retain a lower RMSE.
 
 ---
 
@@ -359,10 +361,10 @@ Validation performance, sorted by RMSE:
 
 | Model | MAE (°C) | RMSE (°C) | R-squared |
 | :--- | ---: | ---: | ---: |
-| Original HistGradientBoosting | **1.2688** | 1.8167 | 0.996421 |
-| Tuned HistGradientBoosting | 1.2769 | **1.8000** | **0.996487** |
+| Original HistGradientBoosting | 1.2849 | 1.7847 | 0.996546 |
+| Tuned HistGradientBoosting | **1.2083** | **1.7188** | **0.996797** |
 
-**Assessment.** Tuning produced a marginal and mixed improvement: RMSE and R-squared improved slightly, while MAE deteriorated slightly. This is the expected outcome when a model already operates near the information ceiling of its features. The tuned model was adopted because RMSE was the search's optimisation target, but the margin is small enough that retaining the untuned configuration would have been equally defensible.
+**Assessment.** Tuning improved all three metrics this time. The tuned model's MAE (1.2083 °C) is now the best of any model evaluated, edging out even Ridge and Linear Regression (1.2150 °C), though those two still hold a lower RMSE (1.6884 °C vs. 1.7188 °C).
 
 The **test set remained untouched** throughout model selection and tuning.
 
@@ -374,11 +376,11 @@ The tuned model was evaluated once, on 7 motor profiles held out from every prio
 
 | Metric | Validation | Test | Change |
 | :--- | ---: | ---: | :--- |
-| MAE | 1.2769 °C | **1.1449 °C** | Improved |
-| RMSE | 1.8000 °C | **1.6449 °C** | Improved |
-| R-squared | 0.996487 | **0.996936** | Improved |
+| MAE | 1.2083 °C | **1.1925 °C** | Improved |
+| RMSE | 1.7188 °C | **1.7183 °C** | Essentially unchanged |
+| R-squared | 0.996797 | 0.996657 | Slightly lower |
 
-**Test performance slightly exceeds validation performance.** This is a reassuring result, indicating that the model is not overfitted to the validation profiles and that the 7 test profiles are marginally easier. An R-squared of approximately 0.997 means the model accounts for nearly all observed variation in stator winding temperature **on motors it has never encountered**.
+**Test performance is close to validation performance, with a mixed picture across metrics.** MAE improves slightly on the test profiles and RMSE is essentially flat, but R-squared is marginally lower. This is not a red flag — R-squared depends on the variance of the target within each profile group, so a small shift is expected when moving to a different set of profiles, and it does not indicate overfitting. An R-squared of approximately 0.997 means the model accounts for nearly all observed variation in stator winding temperature **on motors it has never encountered**.
 
 ---
 
@@ -402,12 +404,12 @@ Residual is defined as **actual minus predicted**. Ideally these scatter randoml
 
 | Statistic | Value |
 | :--- | ---: |
-| Mean residual | **-0.4712 °C** |
-| Standard deviation | 1.5760 °C |
-| Minimum | -12.0062 °C |
-| Maximum | +10.6804 °C |
+| Mean residual | **-0.5521 °C** |
+| Standard deviation | 1.6272 °C |
+| Minimum | -11.7058 °C |
+| Maximum | +10.8520 °C |
 
-**Finding.** The mean residual is **-0.47 °C** rather than approximately zero, indicating that the model **slightly over-predicts** temperature on the test profiles — a small systematic bias. Worst-case errors reach roughly plus or minus 12 °C. Neither observation is visible in MAE, RMSE or R-squared, which is precisely why residual analysis is worth performing. For a safety-critical thermal application the direction of the bias is relevant: over-prediction is the conservative failure mode, but it remains a genuine offset rather than noise.
+**Finding.** The mean residual is **-0.55 °C** rather than approximately zero, indicating that the model **slightly over-predicts** temperature on the test profiles — a small systematic bias. Worst-case errors reach roughly plus or minus 11–12 °C. Neither observation is visible in MAE, RMSE or R-squared, which is precisely why residual analysis is worth performing. For a safety-critical thermal application the direction of the bias is relevant: over-prediction is the conservative failure mode, but it remains a genuine offset rather than noise.
 
 ### Feature Importance
 
@@ -419,19 +421,24 @@ Permutation importance on the validation set, using 5 repeats and scored on nega
 
 | Rank | Feature | Importance | Category |
 | :---: | :--- | ---: | :--- |
-| 1 | **`stator_tooth`** | **49.3563** | Thermal |
-| 2 | **`stator_yoke`** | **8.7694** | Thermal |
-| 3 | `pm` | 1.4171 | Thermal |
-| 4 | `i_d` | 1.1704 | Electrical |
-| 5 | `coolant` | 1.0199 | Thermal |
-| 6 | `torque` | 0.7425 | Mechanical |
-| 7 | `u_q` | 0.5991 | Electrical |
-| 8 | `ambient` | 0.1138 | Thermal |
-| 9 | `i_q` | 0.0579 | Electrical |
-| 10 | `motor_speed` | 0.0274 | Mechanical |
-| 11 | `u_d` | 0.0219 | Electrical |
+| 1 | **`stator_tooth`** | **48.8854** | Thermal |
+| 2 | **`stator_yoke`** | **9.4364** | Thermal |
+| 3 | `current_magnitude` | 2.0646 | Electrical (engineered) |
+| 4 | `pm` | 1.4920 | Thermal |
+| 5 | `coolant` | 0.9174 | Thermal |
+| 6 | `i_d` | 0.4428 | Electrical |
+| 7 | `voltage_magnitude` | 0.1857 | Electrical (engineered) |
+| 8 | `torque` | 0.1354 | Mechanical |
+| 9 | `ambient` | 0.0976 | Thermal |
+| 10 | `u_q` | 0.0780 | Electrical |
+| 11 | `motor_speed` | 0.0598 | Mechanical |
+| 12 | `mechanical_power` | 0.0043 | Mechanical (engineered) |
+| 13 | `i_q` | -0.0014 | Electrical |
+| 14 | `u_d` | -0.0033 | Electrical |
 
-**`stator_tooth` dominates overwhelmingly**, carrying roughly 5.6 times the importance of the next feature and approximately 35 times the remainder combined. This is physically coherent, as the stator tooth sits directly adjacent to the winding and shares its thermal path, making it a near-proxy for the target.
+**`stator_tooth` dominates overwhelmingly**, carrying roughly 5.2 times the importance of the next feature and approximately 3.3 times the remaining thirteen features combined. This is physically coherent, as the stator tooth sits directly adjacent to the winding and shares its thermal path, making it a near-proxy for the target.
+
+**On the three engineered features:** only `current_magnitude` earns its place, landing at rank 3 — ahead of `pm` and `coolant`, and consistent with its role as the direct driver of resistive (copper) heating. `voltage_magnitude` and `mechanical_power` rank near the bottom, close to the noise floor set by `i_q` and `u_d` (whose slightly negative values are permutation-importance noise, not genuine negative contribution). This is a useful, testable outcome of wiring the engineered features into training: the physics-based reasoning behind `current_magnitude` holds up empirically, while the other two add negligible predictive value on top of what the raw sensors already provide.
 
 **An important qualification.** The model's accuracy depends heavily on another temperature sensor located within the same stator. This is legitimate for **virtual sensing**, where replacing a fragile winding sensor with a robust tooth sensor is a genuinely useful engineering outcome. It is **not** a solution for predicting winding temperature from electrical quantities alone, which is a harder problem requiring the stator thermal features to be dropped.
 
@@ -441,9 +448,10 @@ Permutation importance on the validation set, using 5 repeats and scored on nega
 
 The tuned model is saved at [`models/final_temperature_model.pkl`](models/final_temperature_model.pkl) and can be loaded without retraining.
 
-> **Important.** The saved model expects exactly 11 features, in the order given below. The engineered features from notebook 03 are not part of it.
+> **Important.** The saved model expects exactly 14 features, in the order given below: the 11 raw sensors followed by the 3 engineered features. Compute the engineered features with the same formulas used in training before calling `predict`.
 
 ```python
+import numpy as np
 import joblib
 import pandas as pd
 
@@ -454,10 +462,11 @@ model = joblib.load("models/final_temperature_model.pkl")
 FEATURES = [
     "u_q", "coolant", "u_d", "stator_tooth", "motor_speed",
     "i_d", "i_q", "pm", "stator_yoke", "ambient", "torque",
+    "current_magnitude", "voltage_magnitude", "mechanical_power",
 ]
 
-# Example: a single operating point
-sample = pd.DataFrame([{
+# Example: a single operating point (raw sensor readings)
+row = {
     "u_q":          -0.45,
     "coolant":      18.80,
     "u_d":          -0.35,
@@ -469,16 +478,29 @@ sample = pd.DataFrame([{
     "stator_yoke":  18.32,
     "ambient":      19.85,
     "torque":        0.19,
-}])[FEATURES]
+}
+
+# Derive the same physics-based features used during training
+row["current_magnitude"] = np.sqrt(row["i_d"]**2 + row["i_q"]**2)
+row["voltage_magnitude"] = np.sqrt(row["u_d"]**2 + row["u_q"]**2)
+row["mechanical_power"] = row["torque"] * (2 * np.pi * row["motor_speed"] / 60)
+
+sample = pd.DataFrame([row])[FEATURES]
 
 prediction = model.predict(sample)
 print(f"Predicted stator winding temperature: {prediction[0]:.2f} °C")
+# Predicted stator winding temperature: 19.63 °C
 ```
 
 Batch prediction:
 
 ```python
 df = pd.read_csv("your_measurements.csv")
+
+df["current_magnitude"] = np.sqrt(df["i_d"]**2 + df["i_q"]**2)
+df["voltage_magnitude"] = np.sqrt(df["u_d"]**2 + df["u_q"]**2)
+df["mechanical_power"] = df["torque"] * (2 * np.pi * df["motor_speed"] / 60)
+
 df["predicted_stator_winding"] = model.predict(df[FEATURES])
 ```
 
@@ -490,7 +512,7 @@ df["predicted_stator_winding"] = model.predict(df[FEATURES])
 | Property | Value |
 | :--- | :--- |
 | Estimator | `HistGradientBoostingRegressor` |
-| Input features | 11 |
+| Input features | 14 |
 | `learning_rate` | 0.1 |
 | `max_iter` | 300 |
 | `max_leaf_nodes` | 31 |
@@ -564,7 +586,7 @@ Alternatively, open the folder in VS Code and select `.venv` as the Jupyter kern
 01_data_cleaning.ipynb -> 02_eda.ipynb -> 03_feature_engineering.ipynb -> 04_model_training.ipynb
 ```
 
-**Expected runtime.** Notebook 04 takes approximately **10 to 15 minutes** on a typical laptop. Random Forest (approximately 168 seconds) and the 24-fit hyperparameter search dominate that time. All random operations are seeded with `random_state=42` for reproducibility.
+**Expected runtime.** Notebook 04 takes approximately **10 to 20 minutes** on a typical laptop. Random Forest (approximately 170 seconds) and the 24-fit hyperparameter search over 14 features dominate that time. All random operations are seeded with `random_state=42` for reproducibility.
 
 ---
 
@@ -628,7 +650,7 @@ Each captures a different kind of structure:
 - **Random Forest** uses parallel trees, is robust to outliers, and captures interactions
 - **HistGradientBoosting** applies sequential error correction and is designed for large tabular data
 
-The comparison proved to be the most informative part of the project: the linear models are competitive with the boosted model, revealing that the target is largely a linear function of the stator thermal sensors. That finding would have been invisible had only one model been trained.
+The comparison proved to be the most informative part of the project: with the engineered features included, Ridge and Linear Regression actually beat the untuned HistGradientBoosting model on both MAE and RMSE, revealing that the target is largely a linear function of the stator thermal sensors and current magnitude. HistGradientBoosting only pulls ahead on MAE after tuning. That finding would have been invisible had only one model been trained.
 
 </details>
 
@@ -638,6 +660,8 @@ The comparison proved to be the most informative part of the project: the linear
 <br>
 
 The features `current_magnitude`, `voltage_magnitude` and `mechanical_power` encode known motor physics. Resistive heating scales with total current magnitude rather than with `i_d` and `i_q` individually, so providing these directly saves the model from having to rediscover the relationship from raw d/q components.
+
+Permutation importance on the trained model confirms this only partly holds up: `current_magnitude` ranks third overall, ahead of `pm` and `coolant`, but `voltage_magnitude` and `mechanical_power` contribute almost nothing beyond the raw sensors already in the model. Engineering a feature from sound physics does not guarantee the model will find it useful — that has to be checked empirically, which is exactly what the feature importance step is for.
 
 </details>
 
@@ -649,11 +673,11 @@ These are documented openly, as they shape how the results should be interpreted
 
 | # | Limitation | Detail |
 | :---: | :--- | :--- |
-| 1 | **Engineered features are unused by the final model** | Notebook 03 builds `current_magnitude`, `voltage_magnitude` and `mechanical_power`, but notebook 04 re-loads the raw CSV and trains on the 11 raw sensors. The exported model accepts **11 features**. Wiring notebook 03's output into training is the clearest next improvement. |
-| 2 | **The two notebooks use different splits** | Notebook 03 splits 70/30, yielding **48/10/11** profiles; notebook 04 splits 80/20, yielding **55/7/7** profiles. All reported model metrics originate from notebook 04's split. Consolidating onto a single split would make the pipeline internally consistent. |
-| 3 | **Tuning cross-validation does not respect profile groups** | `RandomizedSearchCV` uses plain 3-fold cross-validation, so folds may mix profiles — the precise leakage the top-level split was designed to avoid. `GroupKFold` would make the search internally consistent. Final test metrics are unaffected, as the test profiles were never involved. |
-| 4 | **Accuracy depends heavily on a co-located sensor** | `stator_tooth` carries approximately 49 of roughly 63 total importance. The model is best understood as a **virtual winding sensor** given a tooth sensor, rather than as a prediction from electrical quantities alone. |
-| 5 | **A small systematic bias is present** | The mean test residual is **-0.47 °C**, indicating slight over-prediction rather than an unbiased estimate. |
+| 1 | **The two notebooks use different splits** | Notebook 03 splits 70/30, yielding **48/10/11** profiles; notebook 04 splits 80/20, yielding **55/7/7** profiles. All reported model metrics originate from notebook 04's split. Consolidating onto a single split would make the pipeline internally consistent. |
+| 2 | **Tuning cross-validation does not respect profile groups** | `RandomizedSearchCV` uses plain 3-fold cross-validation, so folds may mix profiles — the precise leakage the top-level split was designed to avoid. `GroupKFold` would make the search internally consistent. Final test metrics are unaffected, as the test profiles were never involved. |
+| 3 | **Accuracy depends heavily on a co-located sensor** | `stator_tooth` carries approximately 49 of roughly 63 total importance. The model is best understood as a **virtual winding sensor** given a tooth sensor, rather than as a prediction from electrical quantities alone. |
+| 4 | **Two of the three engineered features add little value** | `voltage_magnitude` and `mechanical_power` rank near the bottom of permutation importance, close to noise. Only `current_magnitude` earns a meaningful place (rank 3). They add inference-time cost with negligible accuracy benefit and could reasonably be dropped. |
+| 5 | **A small systematic bias is present** | The mean test residual is **-0.55 °C**, indicating slight over-prediction rather than an unbiased estimate. |
 | 6 | **Single train/test draw** | Results derive from one split with `random_state=42`. Repeated group cross-validation would yield confidence intervals rather than point estimates. |
 | 7 | **No temporal validation** | The data is time-series in nature, but the model treats each row independently. Sequence-aware validation would better reflect deployment conditions. |
 | 8 | **Test-bench data only** | All measurements originate from a controlled bench setup and may not transfer directly to on-road operating conditions. |
@@ -664,9 +688,9 @@ These are documented openly, as they shape how the results should be interpreted
 
 **Modelling**
 
-- [ ] Train the final model on the engineered features and quantify whether they add measurable value
+- [ ] Drop `voltage_magnitude` and `mechanical_power` given their negligible measured importance, keeping only `current_magnitude`
 - [ ] Replace cross-validation in tuning with `GroupKFold` so the search respects profile boundaries
-- [ ] Correct the -0.47 °C residual bias through calibration or an adjusted objective
+- [ ] Correct the -0.55 °C residual bias through calibration or an adjusted objective
 - [ ] Train a variant excluding stator thermal sensors, a harder and more broadly useful problem
 - [ ] Add prediction uncertainty through quantile regression or conformal prediction
 - [ ] Explore sequence models such as LSTM or temporal CNN that exploit time structure
