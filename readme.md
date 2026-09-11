@@ -313,8 +313,8 @@ Validation performance, sorted by RMSE:
 | :---: | :--- | ---: | ---: | ---: | ---: |
 | 1 | **Ridge Regression** | **1.2150** | **1.6884** | **0.996909** | 0.48 s |
 | 2 | Linear Regression | 1.2150 | 1.6884 | 0.996909 | 1.21 s |
-| 3 | HistGradientBoosting | 1.2849 | 1.7847 | 0.996546 | 40.42 s |
-| 4 | Random Forest | 1.3543 | 2.0017 | 0.995655 | 172.41 s |
+| 3 | HistGradientBoosting | 1.2849 | 1.7847 | 0.996546 | 31.02 s |
+| 4 | Random Forest | 1.3543 | 2.0017 | 0.995655 | 169.89 s |
 | — | *Baseline (mean)* | *25.9055* | *30.6057* | *-0.015676* | *0.01 s* |
 
 ### Interpretation
@@ -330,7 +330,7 @@ Validation performance, sorted by RMSE:
 
 ## Hyperparameter Tuning
 
-`RandomizedSearchCV` over 8 candidates with 3-fold cross-validation, totalling **24 fits**, scored on negative RMSE.
+`RandomizedSearchCV` over 8 candidates with **`GroupKFold(n_splits=3)`**, totalling **24 fits**, scored on negative RMSE. Cross-validation folds are built on `profile_id`, so no motor profile is split across folds during the search — the same leakage protection used at the top-level train/validation/test split now also applies inside hyperparameter tuning.
 
 <table>
 <tr><th align="left">Search Space</th><th align="left">Selected Parameters</th></tr>
@@ -364,7 +364,9 @@ Validation performance, sorted by RMSE:
 | Original HistGradientBoosting | 1.2849 | 1.7847 | 0.996546 |
 | Tuned HistGradientBoosting | **1.2083** | **1.7188** | **0.996797** |
 
-**Assessment.** Tuning improved all three metrics this time. The tuned model's MAE (1.2083 °C) is now the best of any model evaluated, edging out even Ridge and Linear Regression (1.2150 °C), though those two still hold a lower RMSE (1.6884 °C vs. 1.7188 °C).
+**Assessment.** Tuning improved all three metrics. The tuned model's MAE (1.2083 °C) is now the best of any model evaluated, edging out even Ridge and Linear Regression (1.2150 °C), though those two still hold a lower RMSE (1.6884 °C vs. 1.7188 °C).
+
+**On the group-aware search.** Switching the search from plain 3-fold CV to `GroupKFold` changed the internal cross-validated RMSE used to rank candidates (2.1618 °C → 1.9431 °C), but selected the **exact same best hyperparameters** as the earlier, leakier search. That the choice of hyperparameters didn't change is a reassuring sign: the original tuning result wasn't an artifact of profile leakage between folds. The validation and test metrics above are unaffected, since the final model architecture is identical either way.
 
 The **test set remained untouched** throughout model selection and tuning.
 
@@ -674,13 +676,12 @@ These are documented openly, as they shape how the results should be interpreted
 | # | Limitation | Detail |
 | :---: | :--- | :--- |
 | 1 | **The two notebooks use different splits** | Notebook 03 splits 70/30, yielding **48/10/11** profiles; notebook 04 splits 80/20, yielding **55/7/7** profiles. All reported model metrics originate from notebook 04's split. Consolidating onto a single split would make the pipeline internally consistent. |
-| 2 | **Tuning cross-validation does not respect profile groups** | `RandomizedSearchCV` uses plain 3-fold cross-validation, so folds may mix profiles — the precise leakage the top-level split was designed to avoid. `GroupKFold` would make the search internally consistent. Final test metrics are unaffected, as the test profiles were never involved. |
-| 3 | **Accuracy depends heavily on a co-located sensor** | `stator_tooth` carries approximately 49 of roughly 63 total importance. The model is best understood as a **virtual winding sensor** given a tooth sensor, rather than as a prediction from electrical quantities alone. |
-| 4 | **Two of the three engineered features add little value** | `voltage_magnitude` and `mechanical_power` rank near the bottom of permutation importance, close to noise. Only `current_magnitude` earns a meaningful place (rank 3). They add inference-time cost with negligible accuracy benefit and could reasonably be dropped. |
-| 5 | **A small systematic bias is present** | The mean test residual is **-0.55 °C**, indicating slight over-prediction rather than an unbiased estimate. |
-| 6 | **Single train/test draw** | Results derive from one split with `random_state=42`. Repeated group cross-validation would yield confidence intervals rather than point estimates. |
-| 7 | **No temporal validation** | The data is time-series in nature, but the model treats each row independently. Sequence-aware validation would better reflect deployment conditions. |
-| 8 | **Test-bench data only** | All measurements originate from a controlled bench setup and may not transfer directly to on-road operating conditions. |
+| 2 | **Accuracy depends heavily on a co-located sensor** | `stator_tooth` carries approximately 49 of roughly 63 total importance. The model is best understood as a **virtual winding sensor** given a tooth sensor, rather than as a prediction from electrical quantities alone. |
+| 3 | **Two of the three engineered features add little value** | `voltage_magnitude` and `mechanical_power` rank near the bottom of permutation importance, close to noise. Only `current_magnitude` earns a meaningful place (rank 3). They add inference-time cost with negligible accuracy benefit and could reasonably be dropped. |
+| 4 | **A small systematic bias is present** | The mean test residual is **-0.55 °C**, indicating slight over-prediction rather than an unbiased estimate. |
+| 5 | **Single train/test draw** | Results derive from one split with `random_state=42`. Repeated group cross-validation would yield confidence intervals rather than point estimates. |
+| 6 | **No temporal validation** | The data is time-series in nature, but the model treats each row independently. Sequence-aware validation would better reflect deployment conditions. |
+| 7 | **Test-bench data only** | All measurements originate from a controlled bench setup and may not transfer directly to on-road operating conditions. |
 
 ---
 
@@ -689,7 +690,7 @@ These are documented openly, as they shape how the results should be interpreted
 **Modelling**
 
 - [ ] Drop `voltage_magnitude` and `mechanical_power` given their negligible measured importance, keeping only `current_magnitude`
-- [ ] Replace cross-validation in tuning with `GroupKFold` so the search respects profile boundaries
+- [ ] Consolidate notebooks 03 and 04 onto a single, shared profile split
 - [ ] Correct the -0.55 °C residual bias through calibration or an adjusted objective
 - [ ] Train a variant excluding stator thermal sensors, a harder and more broadly useful problem
 - [ ] Add prediction uncertainty through quantile regression or conformal prediction
